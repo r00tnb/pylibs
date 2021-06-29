@@ -1,122 +1,99 @@
-# coding=utf-8
-
+from struct import unpack, pack
 import math
-#在第i步中，ti是4294967296*abs(sin(i))的整数部分,i的单位是弧度
-tList = [int(4294967296*abs(math.sin(i))) for i in xrange(1,65)]
-s = [7,12,17,22,7,12,17,22,7,12,17,22,7,
-        12,17,22,5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,
-        4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,6,10,
-        15,21,6,10,15,21,6,10,15,21,6,10,15,21]
-#循环左移
-def LL(X,offset,base=32):
-    tmp = (1<<base)-1
-    return ((X<<offset)&tmp)+((X&tmp)>>(base-offset))
+import binascii
 
-def F(X,Y,Z):
-    return ((X&Y)|((~X)&Z))&0xffffffff
-def G(X,Y,Z):
-    return ((X&Z)|(Y&(~Z)))&0xffffffff
-def H(X,Y,Z):
-    return (X^Y^Z)&0xffffffff
-def I(X,Y,Z):
-    return (Y^(X|(~Z)))&0xffffffff
-
-# 打包整数X为字符串
-def pack(X,base=32):
-    return hex(X)[2:].rstrip('L').rjust(base,'0').decode('hex')[::-1]
-def unpack(X,base=32):
-    return int(X.ljust(base/8,'\x00')[::-1].encode('hex'),16)
-
-# 分割32位的hash值为链变量
-def hash_split(X):
-    t = [X[i*8:i*8+8].decode('hex')[::-1] for i in xrange(4)]
-    return [int(i.encode('hex'),16) for i in t]
-
-# 填充文本
-def md5_fill(text,length=False):
-    if length is False:
-        length = len(text)*8
-    lenPad = hex(length)[2:].rstrip('L').rjust(16,'0').decode('hex')[::-1]
-    if len(text) % 64 == 56:
-        text += lenPad
-        return text
-    text += '\x80'
-    if len(text) % 64 == 56:
-        text += lenPad
-        return text
-    while True:
-        text += '\x00'
-        if len(text) % 64 == 56:
-            text += lenPad
-            return text
 
 class MD5:
-    def __init__(self,text='',A=0x67452301,B=0xefcdab89,C=0x98badcfe,D=0x10325476):
+    @staticmethod
+    def F(X: int, Y: int, Z: int):
+        return ((X & Y) | ((~X) & Z))
+
+    @staticmethod
+    def G(X: int, Y: int, Z: int):
+        return ((X & Z) | (Y & (~Z)))
+
+    @staticmethod
+    def H(X: int, Y: int, Z: int):
+        return (X ^ Y ^ Z)
+
+    @staticmethod
+    def I(X: int, Y: int, Z: int):
+        return (Y ^ (X | (~Z)))
+
+    @staticmethod
+    def LL(X: int, offset: int):
+        '''将32bits整数循环向左移动offset位，base指定最大位数
+        '''
+        X &= 0xffffffff
+        return ((X << offset) & 0xffffffff) | (X >> (32-offset))
+
+    def __init__(self, data=b'', A=0x67452301, B=0xefcdab89, C=0x98badcfe, D=0x10325476):
         self.A = A
         self.B = B
         self.C = C
         self.D = D
-        self.text = text
-        self.raw = text
-        self.hash = ''
+        self.raw = data
+        self.hash: bytes = None
 
-    def set_text(self,text):
-        self.raw = text
+    def fill(self, data: bytes) -> bytes:
+        '''填充数据使其能够进行md5摘要运算
+        '''
+        bist_length = len(data)*8
+        if len(data) % 64 == 56:
+            data += pack('<Q', bist_length)
+            return data
+        data += b'\x80'
+        if len(data) % 64 >= 56:
+            data += pack('<Q', bist_length)
+            return data
+        while True:
+            data += b'\x00'
+            if len(data) % 64 == 56:
+                data += pack('<Q', bist_length)
+                return data
 
-    def __fill(self,length=False):
-        if self.text != self.raw:
-            return
-        self.text = self.raw
-        self.text = md5_fill(self.text,length)
-
-    def __mainLoop(self):
-        groups = [self.text[i*64:i*64+64] for i in xrange(len(self.text)/64)]
-        aa = self.A
-        bb = self.B
-        cc = self.C
-        dd = self.D
-        for g in groups:
-            a = aa
-            b = bb
-            c = cc
-            d = dd
-            for i in xrange(64):
-                if i<16:
-                    f = F(b,c,d)
-                    j = i
-                elif i<32:
-                    f = G(b,c,d)
-                    j = (5*i+1)%16
-                elif i<48:
-                    f = H(b,c,d)
-                    j = (3*i+5)%16
-                else:
-                    f = I(b,c,d)
-                    j = (7*i)%16
-                #print f
-                M = int(g[j*4:j*4+4][::-1].encode('hex'),16)
-                a = b+LL(a+f+M+tList[i],s[i])
-                tmp = d
-                d = c
-                c = b
-                b = a
-                a = tmp
-            aa = (aa+a) & 0xffffffff
-            bb = (bb+b) & 0xffffffff
-            cc = (cc+c) & 0xffffffff
-            dd = (dd+d) & 0xffffffff
-        return aa,bb,cc,dd
-    
-    def get_padding_text(self):
-        return self.text
-
-    def md5(self,fillLength=False):
-        self.__fill(fillLength)
-        a,b,c,d = self.__mainLoop()
-        self.hash = ''.join(hex(i).rstrip('L')[2:].rjust(8,'0').decode('hex')[::-1] for i in [a,b,c,d]).encode('hex')
+    def digest(self) -> bytes:
+        '''返回md5 hash值
+        '''
+        self.hash = self.__loop(self.fill(self.raw))
         return self.hash
 
-def md5(text,fillLength=False):
-    m = MD5(text)
-    return m.md5()
+    def hexdigest(self) -> str:
+        '''返回16进制编码的结果
+        '''
+        return binascii.hexlify(self.digest()).decode()
 
+    def __loop(self, filledData: bytes) -> bytes:
+        '''摘要计算循环，返回最终结果
+        '''
+        tList = [int(4294967296*abs(math.sin(i))) for i in range(1, 65)]
+        s = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7,
+             12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+             4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10,
+             15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21]
+        aa, bb, cc, dd = self.A, self.B, self.C, self.D
+
+        for i in range(0, len(filledData), 64):
+            group = filledData[i:i+64]
+            a, b, c, d = aa, bb, cc, dd
+            f, g = 0, 0
+            for k in range(64):
+                if k < 16:
+                    f = MD5.F(b, c, d)
+                    g = k
+                elif k < 32:
+                    f = MD5.G(b, c, d)
+                    g = (5*k+1) % 16
+                elif k < 48:
+                    f = MD5.H(b, c, d)
+                    g = (3*k+5) % 16
+                else:
+                    f = MD5.I(b, c, d)
+                    g = (7*k) % 16
+
+                a, b, c, d = d, b + \
+                    MD5.LL(a+f+tList[k]+unpack('<I',
+                           group[g*4:g*4+4])[0], s[k]), b, c
+            aa, bb, cc, dd = a+aa, b+bb, c+cc, d+dd
+
+        return pack('<4I', aa & 0xffffffff, bb & 0xffffffff, cc & 0xffffffff, dd & 0xffffffff)
